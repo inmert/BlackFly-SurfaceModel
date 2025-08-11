@@ -28,17 +28,18 @@ DETECTION_MODELS = {
         'min_area': 50,
         'aspect_ratio_threshold': 3,
     },
-    'object_detection': {
+    'detr_object_detection': {  # Renamed for clarity
         'type': 'object_detection',
         'model_name': 'facebook/detr-resnet-50',  # DETR for object detection
         'confidence_threshold': 0.5,
         'target_classes': None,  # None means all classes
     },
-    'aircraft_detection': {
+    'yolov8_aircraft_detection': {
         'type': 'object_detection',
-        'model_name': 'facebook/detr-resnet-50',
-        'confidence_threshold': 0.4,
-        'target_classes': ['airplane'],  # Specific class filtering
+        'model_name': 'yolov8n.pt',  # YOLOv8 nano model for high speed
+        'confidence_threshold': 0.2,
+        'target_classes': ['airplane'], # Or other class names from the dataset if needed
+        'framework': 'ultralytics', # Specify the framework for loading
     },
     'segmentation': {
         'type': 'segmentation',
@@ -70,10 +71,12 @@ SYSTEM_CONFIG = {
 import platform
 PLATFORM = platform.system().lower()
 
-if PLATFORM == 'darwin':  # macOS
+if PLATFORM == 'darwin':  
     # M-series Macs use MPS (Metal Performance Shaders)
     SYSTEM_CONFIG['device_preference'] = 'mps'
 elif PLATFORM == 'windows':
+    # CUDA is preferred on Windows
     SYSTEM_CONFIG['device_preference'] = 'cuda'
-else:  # Linux
+else:  
+    # Linux
     SYSTEM_CONFIG['device_preference'] = 'cuda'

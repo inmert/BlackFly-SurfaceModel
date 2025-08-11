@@ -51,13 +51,15 @@ class BaseDetector:
         if results.get('detections'):
             for detection in results['detections']:
                 if 'bbox' in detection:
-                    x, y, w, h = detection['bbox']
-                    cv2.rectangle(output, (x, y), (x+w, y+h), 
+                    # Bounding boxes from YOLO are [x_min, y_min, x_max, y_max]
+                    # while our current code is expecting [x, y, w, h] from DETR
+                    x1, y1, x2, y2 = detection['bbox']
+                    cv2.rectangle(output, (int(x1), int(y1)), (int(x2), int(y2)), 
                                 DISPLAY_CONFIG['colors']['bbox'], 2)
                     
                 if 'label' in detection:
                     label = f"{detection['label']}: {detection.get('confidence', 0):.2f}"
-                    cv2.putText(output, label, (x, y-10),
+                    cv2.putText(output, label, (int(x1), int(y1)-10),
                               cv2.FONT_HERSHEY_SIMPLEX, 
                               DISPLAY_CONFIG['font_scale'],
                               DISPLAY_CONFIG['colors']['text'],
@@ -97,6 +99,8 @@ class CVDetector(BaseDetector):
                 if area > min_area:
                     x, y, w, h = cv2.boundingRect(contour)
                     aspect_ratio = max(w, h) / min(w, h) if min(w, h) > 0 else 0
+                    # Draw contours on the cracks
+                    cv2.drawContours(frame, [contour], -1, (0, 255, 0), 2)
                     
                     if aspect_ratio > aspect_ratio_threshold:
                         detections.append({
@@ -114,7 +118,7 @@ class CVDetector(BaseDetector):
 
 
 class ObjectDetector(BaseDetector):
-    """Object detection using transformer models"""
+    """Object detection using a configurable model framework"""
     
     def __init__(self, model_config):
         super().__init__(model_config)
@@ -122,18 +126,49 @@ class ObjectDetector(BaseDetector):
         
     def _load_model(self):
         try:
-            from transformers import pipeline
+            framework = self.config.get('framework', 'transformers')
+            model_name = self.config['model_name']
             
-            device_map = 0 if self.device == 'cuda' else -1
-            if self.device == 'mps':
-                device_map = -1  # Let transformers handle MPS
+            if framework == 'ultralytics':
+                from torch.serialization import add_safe_globals
+                from ultralytics.nn.tasks import DetectionModel
+                from ultralytics.nn.modules import Conv, C2f, SPPF, Bottleneck, Concat, Detect, DFL
+                import torch.nn as nn
+                from torch.nn.modules.conv import Conv2d
+                from torch.nn.modules.batchnorm import BatchNorm2d
+                from torch.nn.modules.activation import SiLU
+                from torch.nn.modules.container import ModuleList
+                from torch.nn.modules.pooling import MaxPool2d
+                from torch.nn.modules.upsampling import Upsample
+
+                # Add all common YOLOv8 building blocks
+                add_safe_globals([
+                    DetectionModel,    # YOLO architecture
+                    nn.Sequential,     # Sequential containers
+                    Conv, C2f, SPPF, Bottleneck, Concat,Detect,DFL, # YOLO custom layers
+                    Conv2d, BatchNorm2d, SiLU, 
+                    ModuleList, MaxPool2d, Upsample     # Standard PyTorch layers
+                ])
+
+                from ultralytics import YOLO
+                self.model = YOLO(model_name)
+                print(f"Loaded YOLO model: {model_name} on {self.device}")
+
+
+            elif framework == 'transformers':
+                from transformers import pipeline
+                device_map = 0 if self.device == 'cuda' else -1
+                if self.device == 'mps':
+                    device_map = -1  # Let transformers handle MPS
+                self.model = pipeline(
+                    "object-detection",
+                    model=model_name,
+                    device=device_map
+                )
+                print(f"Loaded transformer model: {model_name} on {self.device}")
+            else:
+                raise ValueError(f"Unsupported framework: {framework}")
                 
-            self.model = pipeline(
-                "object-detection",
-                model=self.config['model_name'],
-                device=device_map
-            )
-            print(f"Loaded model: {self.config['model_name']} on {self.device}")
         except Exception as e:
             print(f"Failed to load model: {e}")
             self.model = None
@@ -143,34 +178,56 @@ class ObjectDetector(BaseDetector):
             return {'detections': [], 'success': False, 'error': 'Model not loaded'}
             
         try:
-            # Convert to PIL Image
-            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            
-            # Run detection
-            predictions = self.model(pil_image)
-            
-            detections = []
-            target_classes = self.config.get('target_classes')
+            framework = self.config.get('framework', 'transformers')
             confidence_threshold = self.config.get('confidence_threshold', 0.5)
+            target_classes = self.config.get('target_classes')
+            detections = []
             
-            for pred in predictions:
-                if pred['score'] < confidence_threshold:
-                    continue
-                    
-                if target_classes and pred['label'] not in target_classes:
-                    continue
-                    
-                # Convert to opencv coordinates
-                box = pred['box']
-                x, y = int(box['xmin']), int(box['ymin'])
-                w, h = int(box['xmax'] - box['xmin']), int(box['ymax'] - box['ymin'])
+            if framework == 'ultralytics':
+                # Run YOLOv8 inference
+                results = self.model(frame, conf=confidence_threshold, device=self.device, verbose=False)
                 
-                detections.append({
-                    'bbox': (x, y, w, h),
-                    'confidence': pred['score'],
-                    'label': pred['label']
-                })
+                # Parse results
+                for result in results:
+                    for box in result.boxes:
+                        class_id = int(box.cls)
+                        label = self.model.names[class_id]
+                        
+                        if target_classes and label not in target_classes:
+                            continue
+                        
+                        confidence = float(box.conf)
+                        # Bounding box coordinates in [x_min, y_min, x_max, y_max] format
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+                        
+                        detections.append({
+                            'bbox': (x1, y1, x2, y2),
+                            'confidence': confidence,
+                            'label': label
+                        })
+                        
+            elif framework == 'transformers':
+                # Convert to PIL Image for transformer models
+                pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                predictions = self.model(pil_image)
                 
+                for pred in predictions:
+                    if pred['score'] < confidence_threshold:
+                        continue
+                    if target_classes and pred['label'] not in target_classes:
+                        continue
+                        
+                    box = pred['box']
+                    # Bounding box coordinates in [x_min, y_min, x_max, y_max] format
+                    x1, y1 = int(box['xmin']), int(box['ymin'])
+                    x2, y2 = int(box['xmax']), int(box['ymax'])
+                    
+                    detections.append({
+                        'bbox': (x1, y1, x2, y2),
+                        'confidence': pred['score'],
+                        'label': pred['label']
+                    })
+                    
             return {'detections': detections, 'success': True}
             
         except Exception as e:

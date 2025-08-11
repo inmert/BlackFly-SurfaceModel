@@ -10,6 +10,51 @@ import time
 from abc import ABC, abstractmethod
 from config import CAMERA_CONFIG
 
+# Helper class to manage a singleton PySpin instance
+class _PySpinManager:
+    """Manages a single instance of the PySpin System and camera list."""
+    _system = None
+    _cam_list = None
+    _instance_lock = Lock()
+
+    def __init__(self):
+        # This class is not meant to be instantiated multiple times
+        pass
+
+    @classmethod
+    def get_system(cls):
+        with cls._instance_lock:
+            if cls._system is None:
+                try:
+                    import PySpin
+                    cls._system = PySpin.System.GetInstance()
+                except ImportError:
+                    raise RuntimeError("PySpin not installed. Install Spinnaker SDK and PySpin for Blackfly support.")
+            return cls._system
+
+    @classmethod
+    def get_cam_list(cls):
+        with cls._instance_lock:
+            system = cls.get_system()
+            if cls._cam_list is None:
+                cls._cam_list = system.GetCameras()
+            return cls._cam_list
+
+    @classmethod
+    def release_system(cls):
+        with cls._instance_lock:
+            if cls._cam_list is not None:
+                cls._cam_list.Clear()
+                cls._cam_list = None
+            
+            if cls._system is not None:
+                # This check avoids an error if the system was never acquired
+                if cls._system.IsInUse():
+                    cls._system.ReleaseInstance()
+                cls._system = None
+            print("PySpin System released.")
+
+
 class CameraSource(ABC):
     """Abstract base class for camera sources"""
     
@@ -152,37 +197,35 @@ class BlackflySource(CameraSource):
         self.fps = fps if fps is not None else config['fps']
         self.exposure_time = exposure_time if exposure_time is not None else config['exposure_time']
         
-        self.system = None
-        self.cam_list = None
         self.cam = None
-        self.pyspin_available = False
-        
-    def _initialize_camera(self):
-        """Initialize Blackfly camera"""
+        # PySpin is imported dynamically to avoid hard dependency
+        self.pyspin_available = self._check_pyspin()
+
+    def _check_pyspin(self):
         try:
             import PySpin
-            self.pyspin_available = True
+            return True
         except ImportError:
-            raise RuntimeError("PySpin not installed. Install Spinnaker SDK and PySpin for Blackfly support.")
-            
-        import PySpin
+            return False
+
+    def _initialize_camera(self):
+        """Initialize Blackfly camera using the singleton manager"""
+        if not self.pyspin_available:
+            raise RuntimeError("PySpin not installed. Cannot initialize Blackfly camera.")
+
+        cam_list = _PySpinManager.get_cam_list()
         
-        # Get system instance
-        self.system = PySpin.System.GetInstance()
-        self.cam_list = self.system.GetCameras()
-        
-        if self.cam_list.GetSize() == 0:
-            self.cam_list.Clear()
-            self.system.ReleaseInstance()
+        if cam_list.GetSize() == 0:
+            _PySpinManager.release_system()
             raise RuntimeError("No Blackfly cameras detected")
             
         # Select camera
         if self.serial_number:
-            self.cam = self._find_camera_by_serial(self.serial_number)
+            self.cam = self._find_camera_by_serial(self.serial_number, cam_list)
             if not self.cam:
                 raise RuntimeError(f"Camera with serial {self.serial_number} not found")
         else:
-            self.cam = self.cam_list.GetByIndex(0)
+            self.cam = cam_list.GetByIndex(0)
             
         # Initialize and configure
         self.cam.Init()
@@ -191,23 +234,19 @@ class BlackflySource(CameraSource):
         
         print(f"Blackfly camera initialized: {self.width}x{self.height} @ {self.fps}fps")
         
-    def _find_camera_by_serial(self, serial):
-        """Find camera by serial number"""
+    def _find_camera_by_serial(self, serial, cam_list):
+        """Find camera by serial number without de-initializing others."""
         import PySpin
-        for i in range(self.cam_list.GetSize()):
-            cam = self.cam_list.GetByIndex(i)
+        for i in range(cam_list.GetSize()):
+            cam = cam_list.GetByIndex(i)
             nodemap = cam.GetTLDeviceNodeMap()
             serial_node = PySpin.CStringPtr(nodemap.GetNode('DeviceSerialNumber'))
             if PySpin.IsReadable(serial_node) and serial_node.GetValue() == serial:
                 return cam
-            cam.DeInit()
         return None
         
     def _configure_camera(self):
         """Configure Blackfly camera settings"""
-        if not self.pyspin_available:
-            return
-            
         import PySpin
         nodemap = self.cam.GetNodeMap()
         
@@ -261,11 +300,10 @@ class BlackflySource(CameraSource):
             
     def _capture_frame(self):
         """Capture frame from Blackfly"""
-        if not self.cam or not self.pyspin_available:
+        if not self.cam:
             return None
             
         try:
-            import PySpin
             image_result = self.cam.GetNextImage(1000)
             
             if image_result.IsIncomplete():
@@ -288,36 +326,37 @@ class BlackflySource(CameraSource):
             return None
             
     def _release_camera(self):
-        """Release Blackfly resources"""
-        if not self.pyspin_available:
-            return
-            
+        """Release only the specific Blackfly camera instance."""
         if self.cam:
             try:
-                self.cam.EndAcquisition()
+                if self.cam.IsStreaming():
+                    self.cam.EndAcquisition()
                 self.cam.DeInit()
-            except:
-                pass
-                
-        if self.cam_list:
-            self.cam_list.Clear()
-            
-        if self.system:
-            import PySpin
-            self.system.ReleaseInstance()
+            except Exception as e:
+                print(f"Error releasing camera: {e}")
+            self.cam = None
+
+    @staticmethod
+    def release_system():
+        """Static method to release the global PySpin system."""
+        _PySpinManager.release_system()
             
     @staticmethod
     def list_cameras():
-        """List available Blackfly cameras"""
+        """List available Blackfly cameras using the singleton manager."""
         try:
             import PySpin
-            system = PySpin.System.GetInstance()
-            cam_list = system.GetCameras()
+            cam_list = _PySpinManager.get_cam_list()
             
-            print(f"Found {cam_list.GetSize()} Blackfly camera(s):")
+            num_cameras = cam_list.GetSize()
+            print(f"Found {num_cameras} Blackfly camera(s):")
             cameras = []
             
-            for i in range(cam_list.GetSize()):
+            if num_cameras == 0:
+                _PySpinManager.release_system()
+                return []
+
+            for i in range(num_cameras):
                 cam = cam_list.GetByIndex(i)
                 nodemap = cam.GetTLDeviceNodeMap()
                 
@@ -329,13 +368,13 @@ class BlackflySource(CameraSource):
                 
                 print(f"  Camera {i}: {model} (S/N: {serial})")
                 cameras.append({'index': i, 'serial': serial, 'model': model})
-                
-                cam.DeInit()
-                
-            cam_list.Clear()
-            system.ReleaseInstance()
+
+            # Do not release system here; main app will handle it.
             return cameras
             
         except ImportError:
             print("PySpin not installed. Cannot list Blackfly cameras.")
+            return []
+        except Exception as e:
+            print(f"An error occurred while listing cameras: {e}")
             return []

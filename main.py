@@ -116,10 +116,17 @@ class DetectionApp:
                        1)
                        
     def stop(self):
-        """Stop the application"""
+        """Stop the application and release resources."""
         print("\nStopping detection system...")
         self.running = False
+        
+        # Stop the camera thread first
         self.camera.stop()
+
+        # If the camera was a Blackfly, release the global PySpin system
+        if isinstance(self.camera, BlackflySource):
+            BlackflySource.release_system()
+
         cv2.destroyAllWindows()
         print("Detection system stopped")
 
@@ -128,7 +135,7 @@ def main():
     parser = argparse.ArgumentParser(description='Real-time detection system')
     parser.add_argument('--source', choices=['webcam', 'blackfly'], default='webcam',
                        help='Camera source type')
-    parser.add_argument('--detector', default='crack_detection',
+    parser.add_argument('--detector', default='yolov8_aircraft_detection',
                        choices=['crack_detection', 'object_detection', 
                                'aircraft_detection', 'segmentation'],
                        help='Detection model to use')
@@ -149,9 +156,12 @@ def main():
     
     args = parser.parse_args()
     
-    # List cameras if requested
+    # List cameras if requested, then exit.
     if args.list_cameras:
-        BlackflySource.list_cameras()
+        cameras_found = BlackflySource.list_cameras()
+        # Release system after listing
+        if cameras_found is not None:
+             BlackflySource.release_system()
         return
         
     # Create camera source
