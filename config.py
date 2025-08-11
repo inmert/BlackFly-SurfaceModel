@@ -32,7 +32,7 @@ DETECTION_MODELS = {
         'type': 'object_detection',
         'model_name': 'facebook/detr-resnet-50',  # DETR for object detection
         'confidence_threshold': 0.5,
-        'target_classes': None,  # None means all classes
+        'target_classes': ['airplane'],  # None means all classes
     },
     'yolov8_aircraft_detection': {
         'type': 'object_detection',
