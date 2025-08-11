@@ -2,15 +2,15 @@ import cv2
 import time
 import argparse
 from camera_interface import BlackflyCamera
-from model_interface import FlexibleVisionDetector, VisionModelFactory, EXAMPLE_MODELS
+from model_interface import CrackDetector
 
-class RealTimeVisionSystem:
+class RealTimeCrackDetection:
     """
-    Main application class that combines camera and any vision model
+    Main application class that combines camera and detection
     """
     
-    def __init__(self, task_type, model_name, serial_number=None, 
-                 width=1280, height=720, fps=30, exposure_time=10000, confidence_threshold=0.3):
+    def __init__(self, serial_number=None, model_name="microsoft/DiNAT-Large-ImageNet-1K-224", 
+                 width=1280, height=720, fps=30, exposure_time=10000):
         self.camera = BlackflyCamera(
             serial_number=serial_number,
             width=width,
@@ -18,24 +18,14 @@ class RealTimeVisionSystem:
             fps=fps,
             exposure_time=exposure_time
         )
-        self.detector = FlexibleVisionDetector(
-            task_type=task_type,
-            model_name=model_name, 
-            confidence_threshold=confidence_threshold
-        )
+        self.detector = CrackDetector(model_name=model_name)
         self.fps_counter = 0
         self.fps_time = time.time()
         self.running = False
-        self.task_type = task_type
         
     def start(self):
-        """Start the real-time vision system"""
-        print(f"Starting real-time {self.task_type} system...")
-        
-        # Check if model is available
-        if not self.detector.is_available():
-            print("Error: Model not available. Please check model name and try again.")
-            return
+        """Start the real-time detection system"""
+        print("Starting real-time crack detection system...")
         
         # Initialize camera
         self.camera.start()
@@ -51,7 +41,7 @@ class RealTimeVisionSystem:
         
     def run_detection_loop(self):
         """Main detection loop"""
-        print(f"Detection loop started. Press 'q' to quit, 's' to save current frame.")
+        print("Detection loop started. Press 'q' to quit, 's' to save current frame.")
         
         while self.running:
             # Get frame from camera
@@ -59,7 +49,7 @@ class RealTimeVisionSystem:
             if frame is None:
                 continue
                 
-            # Process frame
+            # Process frame for anomalies
             start_time = time.time()
             results = self.detector.process_frame(frame)
             processing_time = (time.time() - start_time) * 1000  # Convert to ms
@@ -78,13 +68,12 @@ class RealTimeVisionSystem:
                 fps = 0
                 
             if fps > 0:
-                info_text = f"FPS: {fps:.1f} | Processing: {processing_time:.1f}ms | Task: {self.task_type}"
+                info_text = f"FPS: {fps:.1f} | Processing: {processing_time:.1f}ms"
                 cv2.putText(output_frame, info_text, (10, output_frame.shape[0] - 10), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             # Display the result
-            window_title = f'Real-time {self.task_type.title().replace("-", " ")}'
-            cv2.imshow(window_title, output_frame)
+            cv2.imshow('Real-time Crack Detection', output_frame)
             
             # Handle keyboard input
             key = cv2.waitKey(1) & 0xFF
@@ -93,7 +82,7 @@ class RealTimeVisionSystem:
             elif key == ord('s'):
                 # Save current frame with detections
                 timestamp = int(time.time())
-                filename = f"{self.task_type}_{timestamp}.jpg"
+                filename = f"crack_detection_{timestamp}.jpg"
                 cv2.imwrite(filename, output_frame)
                 print(f"Saved frame: {filename}")
                 
@@ -101,83 +90,46 @@ class RealTimeVisionSystem:
         
     def stop(self):
         """Stop the detection system"""
-        print("Stopping vision system...")
+        print("Stopping detection system...")
         self.running = False
         self.camera.stop()
         cv2.destroyAllWindows()
-        print("Vision system stopped.")
-
-def print_example_models():
-    """Print example models for each task type"""
-    print("\nExample models by task type:")
-    print("=" * 50)
-    for task, models in EXAMPLE_MODELS.items():
-        print(f"\n{task.upper().replace('-', ' ')}:")
-        for model in models:
-            print(f"  - {model}")
+        print("Detection system stopped.")
 
 def main():
-    parser = argparse.ArgumentParser(description='Real-time vision processing using FLIR Blackfly camera and Hugging Face models')
-    
-    # Model configuration
-    parser.add_argument('--task', type=str, required=True,
-                       choices=VisionModelFactory.list_supported_tasks(),
-                       help='Vision task type')
-    parser.add_argument('--model', type=str, required=True,
-                       help='Hugging Face model name')
-    parser.add_argument('--confidence', type=float, default=0.3,
-                       help='Confidence threshold for detections')
-    
-    # Camera configuration
+    parser = argparse.ArgumentParser(description='Real-time crack detection using FLIR Blackfly camera')
     parser.add_argument('--serial', type=str, default=None, 
                        help='Camera serial number (uses first available if not specified)')
+    parser.add_argument('--model', type=str, default="microsoft/DiNAT-Large-ImageNet-1K-224", 
+                       help='Hugging Face model name')
     parser.add_argument('--width', type=int, default=1280, help='Image width')
     parser.add_argument('--height', type=int, default=720, help='Image height')
     parser.add_argument('--fps', type=int, default=30, help='Frame rate')
     parser.add_argument('--exposure', type=int, default=10000, help='Exposure time in microseconds')
-    
-    # Utility options
     parser.add_argument('--list-cameras', action='store_true', help='List available cameras and exit')
-    parser.add_argument('--list-tasks', action='store_true', help='List supported vision tasks and exit')
-    parser.add_argument('--example-models', action='store_true', help='Show example models and exit')
     
     args = parser.parse_args()
     
-    # Handle utility options
+    # List cameras if requested
     if args.list_cameras:
         BlackflyCamera.list_cameras()
         return
     
-    if args.list_tasks:
-        print("Supported vision tasks:")
-        for task in VisionModelFactory.list_supported_tasks():
-            print(f"  - {task}")
-        return
-    
-    if args.example_models:
-        print_example_models()
-        return
-    
     try:
-        app = RealTimeVisionSystem(
-            task_type=args.task,
-            model_name=args.model,
+        app = RealTimeCrackDetection(
             serial_number=args.serial,
+            model_name=args.model,
             width=args.width,
             height=args.height,
             fps=args.fps,
-            exposure_time=args.exposure,
-            confidence_threshold=args.confidence
+            exposure_time=args.exposure
         )
         app.start()
     except KeyboardInterrupt:
         print("\nInterrupted by user")
     except Exception as e:
         print(f"Error: {e}")
-        print("\nTry running with:")
-        print("  --list-cameras    to see available cameras")
-        print("  --list-tasks      to see supported vision tasks")
-        print("  --example-models  to see example models")
+        print("\nTry running with --list-cameras to see available cameras")
 
 if __name__ == "__main__":
     main()
