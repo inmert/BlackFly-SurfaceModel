@@ -84,12 +84,6 @@ class WebcamDemo:
         self.detector = SimpleWebcamDetector(detection_type)
         self.cap = None
         self.prev_frame = None
-        self.recording = False
-        self.video_writer = None
-        
-        # Create save directory
-        self.save_path = Path('./webcam_captures')
-        self.save_path.mkdir(exist_ok=True)
         
     def run(self):
         """Run the webcam demo"""
@@ -127,8 +121,6 @@ class WebcamDemo:
         print(f"Webcam opened: {width}x{height} @ {fps}fps")
         print("\nControls:")
         print("  'q' - Quit")
-        print("  's' - Save screenshot")
-        print("  'r' - Start/stop recording")
         print("  'd' - Switch detection mode")
         print("  'n' - No detection (normal view)")
         print("-" * 30)
@@ -167,13 +159,6 @@ class WebcamDemo:
                 cv2.putText(output, f"Mode: {self.detector.detection_type}", (10, 60),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                            
-                if self.recording:
-                    cv2.circle(output, (width - 30, 30), 10, (0, 0, 255), -1)
-                    cv2.putText(output, "REC", (width - 80, 40),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    if self.video_writer:
-                        self.video_writer.write(output)
-                        
                 # Display
                 cv2.imshow('Webcam Demo', output)
                 
@@ -182,27 +167,6 @@ class WebcamDemo:
                 
                 if key == ord('q'):
                     break
-                elif key == ord('s'):
-                    # Save screenshot
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    filename = self.save_path / f"capture_{timestamp}.jpg"
-                    cv2.imwrite(str(filename), output)
-                    print(f"Saved: {filename}")
-                elif key == ord('r'):
-                    # Toggle recording
-                    if not self.recording:
-                        timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        filename = self.save_path / f"recording_{timestamp}.mp4"
-                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                        self.video_writer = cv2.VideoWriter(str(filename), fourcc, 20.0, (width, height))
-                        self.recording = True
-                        print(f"Recording started: {filename}")
-                    else:
-                        self.recording = False
-                        if self.video_writer:
-                            self.video_writer.release()
-                            self.video_writer = None
-                        print("Recording stopped")
                 elif key == ord('d'):
                     # Switch detection mode
                     mode_index = (mode_index + 1) % len(detection_modes)
@@ -220,8 +184,6 @@ class WebcamDemo:
             print("\nInterrupted by user")
         finally:
             # Cleanup
-            if self.recording and self.video_writer:
-                self.video_writer.release()
             self.cap.release()
             cv2.destroyAllWindows()
             print("Webcam demo stopped")

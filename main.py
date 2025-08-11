@@ -24,11 +24,6 @@ class DetectionApp:
         self.fps_counter = 0
         self.fps_time = time.time()
         
-        # Create save directory if needed
-        save_path = Path(SYSTEM_CONFIG.get('save_path', './detections'))
-        save_path.mkdir(exist_ok=True)
-        self.save_path = save_path
-        
     def run(self):
         """Main application loop"""
         print("Starting detection system...")
@@ -43,7 +38,6 @@ class DetectionApp:
         
         print("\nControls:")
         print("  'q' - Quit")
-        print("  's' - Save current frame")
         print("  'r' - Reset detector")
         print("-" * 30)
         
@@ -78,8 +72,6 @@ class DetectionApp:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
-                elif key == ord('s'):
-                    self._save_frame(output_frame)
                 elif key == ord('r'):
                     print("Resetting detector...")
                     self.detector = create_detector(self.detector.__class__.__name__)
@@ -123,13 +115,6 @@ class DetectionApp:
                        DISPLAY_CONFIG['colors']['detection'],
                        1)
                        
-    def _save_frame(self, frame):
-        """Save current frame with timestamp"""
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        filename = self.save_path / f"detection_{timestamp}.jpg"
-        cv2.imwrite(str(filename), frame)
-        print(f"Saved: {filename}")
-        
     def stop(self):
         """Stop the application"""
         print("\nStopping detection system...")

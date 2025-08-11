@@ -63,7 +63,6 @@ DISPLAY_CONFIG = {
 # System Settings
 SYSTEM_CONFIG = {
     'use_gpu': True,  # Will fallback to CPU if CUDA not available
-    'save_path': './detections',  # Directory for saved frames
     'log_level': 'INFO',
 }
 
